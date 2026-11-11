@@ -42,6 +42,9 @@ public struct ChatTurn: Identifiable, Codable, Hashable, Sendable {
     public var isStreaming: Bool
     /// Latency and throughput for this answer.
     public var metrics: TurnMetrics?
+    /// Monotonic revision for O(1) row equality. Optional so conversations
+    /// persisted before this field keep decoding.
+    public var contentRevision: Int?
 
     public init(
         id: UUID = UUID(),
@@ -54,7 +57,8 @@ public struct ChatTurn: Identifiable, Codable, Hashable, Sendable {
         stopReason: StopReason? = nil,
         usage: TokenUsage? = nil,
         isStreaming: Bool = false,
-        metrics: TurnMetrics? = nil
+        metrics: TurnMetrics? = nil,
+        contentRevision: Int? = nil
     ) {
         self.id = id
         self.role = role
@@ -67,6 +71,7 @@ public struct ChatTurn: Identifiable, Codable, Hashable, Sendable {
         self.usage = usage
         self.isStreaming = isStreaming
         self.metrics = metrics
+        self.contentRevision = contentRevision
     }
 }
 
@@ -80,6 +85,9 @@ public struct Conversation: Identifiable, Codable, Hashable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
     public var turns: [ChatTurn]
+    /// Optional so conversations saved before the sidebar redesign decode.
+    public var isPinned: Bool?
+    public var isUnread: Bool?
 
     public init(
         id: UUID = UUID(),
@@ -89,7 +97,9 @@ public struct Conversation: Identifiable, Codable, Hashable, Sendable {
         model: String = "",
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        turns: [ChatTurn] = []
+        turns: [ChatTurn] = [],
+        isPinned: Bool? = nil,
+        isUnread: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -99,6 +109,8 @@ public struct Conversation: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.turns = turns
+        self.isPinned = isPinned
+        self.isUnread = isUnread
     }
 
     /// Derive a short title from the first user message.

@@ -133,7 +133,9 @@ enum MessagePreparer {
 
     /// Width available to a table inside the conversation column.
     static var tableAvailableWidth: CGFloat {
-        Theme.Metrics.readableWidth - Theme.Spacing.l * 2
+        // `contentColumn()` caps the content at readableWidth, then adds the
+        // gutter outside that frame. The table therefore gets the full column.
+        Theme.Metrics.readableWidth
     }
 
     static func prepare(_ turn: ChatTurn) -> PreparedMessage {
@@ -354,6 +356,7 @@ final class MessageCache: @unchecked Sendable {
     func prepared(for turn: ChatTurn) -> PreparedMessage {
         lock.lock()
         if let entry = entries[turn.id],
+           entry.textLength == turn.text.utf8.count,
            entry.text == turn.text,
            entry.reasoning == turn.reasoning,
            entry.isStreaming == turn.isStreaming {
@@ -404,7 +407,9 @@ final class MessageCache: @unchecked Sendable {
 
     /// Memoised preparation for callers that only have a string.
     func prepared(text: String, isStreaming: Bool = false) -> PreparedMessage {
-        let key = "\(isStreaming)-\(text.count)-\(text.hashValue)"
+        var hasher = SHA256()
+        hasher.update(Data(text.utf8))
+        let key = "\(isStreaming)-\(text.count)-\(hasher.finalize())"
 
         lock.lock()
         if let entry = textEntries[key] {
@@ -442,7 +447,10 @@ final class MessageCache: @unchecked Sendable {
             // and system turns use plain Text, so preparing them is wasted work.
             guard turn.role == .assistant else { return false }
             guard let entry = entries[turn.id] else { return true }
-            return entry.text != turn.text
+            // Length first: a streaming append almost always differs in length,
+            // which avoids scanning the whole message just to discover that.
+            return entry.textLength != turn.text.utf8.count
+                || entry.text != turn.text
                 || entry.reasoning != turn.reasoning
                 || entry.isStreaming != turn.isStreaming
         }

@@ -78,7 +78,8 @@ no version conflicts with anything else in your project.
 - **No code execution from model output** – answers are rendered as text and
   attributed strings only. No HTML, no JavaScript, no shell. Links are opened
   by the system.
-- **No logging of secrets** – the app does not write a log file at all.
+- **No logging of secrets** – the app does not write a log file at all. API keys
+  are Keychain-only.
 - **No network listeners** – the app only makes outbound requests (the test
   suite opens a loopback socket, but that code never ships in the app target).
 
@@ -218,6 +219,68 @@ without requiring an asset catalog.
   *Reduce Motion*.
 - Empty chats show four suggestion chips that pre-fill the composer.
 
+### Virtual Mac (embedded terminal-mac engine)
+
+BUU now embeds the `Virtualization`-based VM engine and guest helper from
+[terminal-mac](https://github.com/govijr/terminal-mac) (MIT). The VM, guest
+helper, shared mailbox and screenshot/input path live in this repository; there
+is no external Swift package dependency.
+
+Virtualization needs a signed app bundle with the
+`com.apple.security.virtualization` entitlement. Build with:
+
+```bash
+make app              # builds BUU.app and the nested guest helper
+open build/BUU.app
+```
+
+`swift run BUU` still works for chat, but the Virtual Mac cannot boot without the
+entitlement.
+
+Open **Sidebar → Agentic → Mac Tasks**. Named Mac Task configurations (VM name,
+resources, display and optional restore image) are managed in **Settings → Mac
+Tasks**; the task pane loads the active configuration. On first use BUU downloads a
+compatible macOS restore image from Apple (several GB) and installs a separate
+virtual Mac. Complete macOS Setup Assistant in the VM window, then open
+`/Volumes/My Shared Files/tools/BUUVirtualMacGuest.app` inside the guest and
+allow Screen Recording and Accessibility. The host needs neither permission.
+
+The Mac Tasks workspace uses the window toolbar for Display/Activity/
+Configuration, keeps the live VM display aspect-fit, and places the agent in a
+collapsible trailing inspector or a resizable bottom split. The agent panel has a
+fixed run bar, a single scrolling middle tab (Trace/Artifacts/Outputs/Queue) and
+a pinned composer. No separate VM window is required by default. Display also contains the
+agent prompt, execution controls and response/tool log, with stacked or
+side-by-side layout. Both layouts use native draggable split views, so the VM
+display and agent control area can be resized. **Activity** holds VM lifecycle controls and install/
+runtime/error logs; **Configuration** shows the active VM profile. The agent
+loop can be paused at a configurable round limit and resumed from its saved
+context, or cleared with **Clear context**. Files attached to the prompt are
+copied into a per-task host workspace and then into the guest at
+`~/Desktop/BUU Artifacts` (with `~/Desktop/BUU Outputs` for results). Transfers
+are chunked over the existing virtiofs mailbox with SHA-256 verification and
+resume. The model uses guest-centric tools: `list_artifacts`, `open_artifact`,
+`reveal_artifact`, `read_artifact`, `extract_artifact_text`, `write_artifact`,
+`guest_frontmost_app` and `guest_list_windows`. While a loop is running,
+steering is a separate pinned composer below the trace: Return queues a steer for
+the next safe boundary, Option-Return interrupts and applies it now, and the
+pending cards remain editable/reorderable until the loop marks them applying.
+The workspace task queue is a separate collapsible tray under the run controls;
+use **Queue task** or the header queue button. Queued tasks keep their own prompt,
+files, provider/model, budget, VM-state policy and fresh/continue-context choice,
+run sequentially in the workspace, and support pause/resume, run-next-now and
+stop-on-failure. Both steers and queue transitions are included in readable and
+JSON trace exports. **Export logs…** covers VM/install, error, agent-loop and full
+reasoning-trace exports. Exports write to a location chosen in the standard save
+panel. Choose any configured provider endpoint and model;
+the loop exposes exactly the `vm_status`, `vm_screenshot`, `vm_click`, `vm_move`,
+`vm_drag`, `vm_scroll`, `vm_type` and `vm_key` tools. There is no shell tool and
+no host screen/input API: every action goes through the guest helper.
+
+The vendored VM targets are kept in Swift 5 language mode because they depend on
+the upstream Virtualization/AppKit/ScreenCaptureKit stack. The BUU app and
+BUUKit remain Swift 6.
+
 ## Requirements
 
 - macOS 14 or newer
@@ -266,41 +329,27 @@ the `/v1` prefix is added automatically. Anthropic compatible servers get
 `/v1/messages` and `/v1/models` appended (unless the base URL already ends in
 `/v1`).
 
-## Project layout
+### Mac Tasks
 
-```
-Sources/
-  BUUKit/            platform independent core (no SwiftUI)
-    Models/          endpoint, conversation, request/response models
-    Networking/      HTTP transport, SSE decoder, OpenAI & Anthropic transports
-    Persistence/     file store, settings, conversation store, keychain
-    Markdown/        markdown block parser, syntax highlighter
-    Images/          image downscaling / re-encoding
-  BUU/               the macOS app (SwiftUI)
-    BUUApp.swift     @main entry point
-    AppState.swift   observable application state
-    Views/           sidebar, transcript, composer, settings, markdown renderer
-Tests/BUUKitTests/   unit tests for the wire formats, SSE, markdown, storage
-```
+The sidebar has two top-level sections: **Chats** and **Agentic**. Agentic lists
+Mac Task instances; **New Task** opens a wizard for a macOS VM task, names it,
+selects a configuration profile, and optionally saves a prompt without running
+it.
 
-`BUUKit` deliberately contains no UI code, which makes the protocol handling
-testable on any platform.
+Each task keeps its own configuration choice, prompt, logs and surface state,
+while configuration profiles remain reusable. Inside a task you can switch to
+any existing configuration or create a new one (including a fresh VM) without
+affecting other tasks.
 
-## How a request is made
+**Settings → VM Profiles** manages reusable macOS VM recipes: image source,
+macOS version, architecture, storage, CPU/RAM/disk, networking, shared folder,
+display and graphics. Profiles support create, edit, duplicate, delete, default
+selection and surface host-capacity warnings. **Settings → VM Instances** lists
+installed VMs and allows deleting their disk/hardware files.
 
-1. The transcript is converted into a protocol neutral `ChatRequest`
-   (role + text/image blocks).
-2. `OpenAITransport` or `AnthropicTransport` encodes it:
-   - OpenAI: `messages[].content` is a string or an array of
-     `{"type":"text"}` / `{"type":"image_url"}` parts.
-   - Anthropic: `system` is a separate field, `messages[].content` is an array
-     of `{"type":"text"}` / `{"type":"image"}` blocks, consecutive same-role
-     messages are merged and `max_tokens` is always sent.
-3. The response is consumed as `text/event-stream`. If a server ignores
-   `stream: true` and answers with plain JSON, the client detects the content
-   type and parses the JSON instead.
-4. Every delta is appended to the assistant message, so the UI updates live.
+Model lists are fetched lazily when the model picker opens because
+`/api/v1/agents?models=1` shells out to `pi --list-models` (about 3.6 s).
+Uploads and task routes are operator-only. The agent runs on the Pi with its own
+short-lived task token; the window never executes browser actions or CDP itself.
 
-## License
 
-MIT

@@ -109,7 +109,7 @@ struct StreamDecodingTests {
             from: SSEEvent(data: #"{"type":"content_block_stop","index":1}"#),
             state: &state
         )
-        guard case .toolCall(let name, let arguments) = try #require(events.first) else {
+        guard case .toolCall(_, let name, let arguments) = try #require(events.first) else {
             Issue.record("expected a tool call event")
             return
         }

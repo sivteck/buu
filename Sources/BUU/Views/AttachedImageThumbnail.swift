@@ -8,6 +8,7 @@ actor AttachmentImageLoader {
 
     private let fileStore = FileStore()
     private var cache: [String: Data] = [:]
+    private var thumbnails: [String: Data] = [:]
 
     func url(for attachment: ImageAttachment) async -> URL {
         await fileStore.attachmentsDirectory
@@ -18,14 +19,28 @@ actor AttachmentImageLoader {
         if let cached = cache[attachment.fileName] { return cached }
         let url = await url(for: attachment)
         guard let data = try? await fileStore.readData(from: url) else { return nil }
+        if cache.count >= 24 { cache.removeAll(keepingCapacity: true) }
         cache[attachment.fileName] = data
         return data
+    }
+
+    func thumbnail(for attachment: ImageAttachment, maxPixelSize: Int = 264) async -> Data? {
+        let key = "\(attachment.fileName)-\(maxPixelSize)"
+        if let cached = thumbnails[key] { return cached }
+        guard let data = await data(for: attachment),
+              let thumbnail = ImageProcessor.thumbnailData(data: data, maxPixelSize: maxPixelSize) else {
+            return nil
+        }
+        if thumbnails.count >= 120 { thumbnails.removeAll(keepingCapacity: true) }
+        thumbnails[key] = thumbnail
+        return thumbnail
     }
 }
 
 /// A clickable attachment thumbnail. Clicking it opens the full size preview.
 struct AttachedImageThumbnail: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let attachment: ImageAttachment
     @State private var image: NSImage?
@@ -43,7 +58,7 @@ struct AttachedImageThumbnail: View {
         .accessibilityLabel("View attached image")
         .onHover { isHovering = $0 }
         .task {
-            if let data = await AttachmentImageLoader.shared.data(for: attachment),
+            if let data = await AttachmentImageLoader.shared.thumbnail(for: attachment),
                let loaded = NSImage(data: data) {
                 image = loaded
             }
@@ -75,6 +90,7 @@ struct AttachedImageThumbnail: View {
             }
         }
         .frame(width: 88, height: 88)
+        .compositingGroup()
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous)
@@ -84,6 +100,6 @@ struct AttachedImageThumbnail: View {
                 )
         }
         .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous))
-        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovering)
     }
 }

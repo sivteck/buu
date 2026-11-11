@@ -109,6 +109,8 @@ struct ChatTitleView: View {
     }
 }
 
+
+
 // MARK: - Model pill
 
 /// A single compact pill: model name, then a trailing chevron.

@@ -14,12 +14,15 @@ public enum ChatRequestBuilder {
         model: String,
         temperature: Double? = nil,
         topP: Double? = nil,
-        maxTokens: Int? = nil
+        maxTokens: Int? = nil,
+        tools: [ToolDefinition] = []
     ) -> ChatRequest {
         var messages: [ChatMessage] = []
 
         for turn in turns {
-            guard !turn.isStreaming else { continue }
+            // Tool results are transient during a tool loop; persisted turns do
+            // not carry the call id needed to replay them.
+            guard !turn.isStreaming, turn.role != .tool else { continue }
             var blocks: [ContentBlock] = []
             if !turn.text.isEmpty {
                 blocks.append(.text(turn.text))
@@ -29,7 +32,11 @@ public enum ChatRequestBuilder {
                 blocks.append(.image(ImagePayload(mimeType: image.mimeType, data: data)))
             }
             guard !blocks.isEmpty else { continue }
-            messages.append(ChatMessage(role: turn.role, blocks: blocks))
+            messages.append(ChatMessage(
+                role: turn.role,
+                blocks: blocks,
+                reasoning: turn.role == .assistant && !turn.reasoning.isEmpty ? turn.reasoning : nil
+            ))
         }
 
         return ChatRequest(
@@ -38,7 +45,8 @@ public enum ChatRequestBuilder {
             system: system,
             temperature: temperature,
             topP: topP,
-            maxTokens: maxTokens
+            maxTokens: maxTokens,
+            tools: tools
         )
     }
 }

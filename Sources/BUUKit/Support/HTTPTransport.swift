@@ -50,18 +50,34 @@ public struct HTTPError: LocalizedError, Sendable {
 public enum HTTPTransport {
 
     /// Perform a request and wait for the whole body.
-    public static func perform(_ request: URLRequest) async throws -> (Data, HTTPResponseHead) {
-        try await withCheckedThrowingContinuation { continuation in
-            let task = URLSession.shared.dataTask(with: request) { data, response, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
+    ///
+    /// The request is cancelled when the calling task is cancelled. That matters
+    /// for long-poll requests, which would otherwise keep a URLSession task alive
+    /// after the UI has moved on.
+    public static func perform(
+        _ request: URLRequest,
+        session: URLSession = .shared
+    ) async throws -> (Data, HTTPResponseHead) {
+        let box = URLSessionTaskBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let task = session.dataTask(with: request) { data, response, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                        return
+                    }
+                    let http = response as? HTTPURLResponse
+                    let head = HTTPResponseHead(statusCode: http?.statusCode ?? 0, headers: headers(of: http))
+                    continuation.resume(returning: (data ?? Data(), head))
                 }
-                let http = response as? HTTPURLResponse
-                let head = HTTPResponseHead(statusCode: http?.statusCode ?? 0, headers: headers(of: http))
-                continuation.resume(returning: (data ?? Data(), head))
+                box.set(task)
+                if Task.isCancelled {
+                    task.cancel()
+                }
+                task.resume()
             }
-            task.resume()
+        } onCancel: {
+            box.cancel()
         }
     }
 
@@ -88,6 +104,30 @@ public enum HTTPTransport {
             result[String(describing: key).lowercased()] = String(describing: value)
         }
         return result
+    }
+}
+
+/// Holds the data task created inside a continuation so a task cancellation
+/// that arrives before (or after) `set(_:)` can still cancel it.
+private final class URLSessionTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDataTask?
+    private var isCancelled = false
+
+    func set(_ task: URLSessionDataTask) {
+        lock.lock()
+        self.task = task
+        let cancel = isCancelled
+        lock.unlock()
+        if cancel { task.cancel() }
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let task = task
+        lock.unlock()
+        task?.cancel()
     }
 }
 

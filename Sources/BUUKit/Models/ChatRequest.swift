@@ -5,12 +5,14 @@ public enum MessageRole: String, Codable, Sendable, CaseIterable {
     case system
     case user
     case assistant
+    case tool
 
     public var displayName: String {
         switch self {
         case .system: return "System"
         case .user: return "You"
         case .assistant: return "Assistant"
+        case .tool: return "Tool"
         }
     }
 }
@@ -51,14 +53,60 @@ public enum ContentBlock: Sendable, Hashable {
 public struct ChatMessage: Sendable, Hashable {
     public var role: MessageRole
     public var blocks: [ContentBlock]
+    /// Tool calls made by an assistant message.
+    public var toolCalls: [ToolCall]
+    /// Set on a `.tool` message so the provider can match the result to a call.
+    public var toolCallID: String?
+    public var toolName: String?
+    public var toolIsError: Bool?
+    /// Provider-specific reasoning/thinking text that must be echoed back in
+    /// tool-call conversations for thinking-mode models.
+    public var reasoning: String?
 
-    public init(role: MessageRole, blocks: [ContentBlock]) {
+    public init(
+        role: MessageRole,
+        blocks: [ContentBlock],
+        toolCalls: [ToolCall] = [],
+        toolCallID: String? = nil,
+        toolName: String? = nil,
+        toolIsError: Bool? = nil,
+        reasoning: String? = nil
+    ) {
         self.role = role
         self.blocks = blocks
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.toolName = toolName
+        self.toolIsError = toolIsError
+        self.reasoning = reasoning
     }
 
     public init(role: MessageRole, text: String) {
         self.init(role: role, blocks: text.isEmpty ? [] : [.text(text)])
+    }
+
+    public init(role: MessageRole, text: String, toolCalls: [ToolCall], reasoning: String? = nil) {
+        self.init(
+            role: role,
+            blocks: text.isEmpty ? [] : [.text(text)],
+            toolCalls: toolCalls,
+            reasoning: reasoning
+        )
+    }
+
+    public static func toolResult(
+        callID: String,
+        name: String,
+        text: String,
+        isError: Bool = false
+    ) -> ChatMessage {
+        ChatMessage(
+            role: .tool,
+            blocks: [.text(text)],
+            toolCallID: callID,
+            toolName: name,
+            toolIsError: isError
+        )
     }
 
     public var text: String {
@@ -79,6 +127,8 @@ public struct ChatRequest: Sendable {
     public var topP: Double?
     public var maxTokens: Int?
     public var stopSequences: [String]
+    /// Tools the model may call. Empty means the request has no tool surface.
+    public var tools: [ToolDefinition]
 
     public init(
         model: String,
@@ -87,7 +137,8 @@ public struct ChatRequest: Sendable {
         temperature: Double? = nil,
         topP: Double? = nil,
         maxTokens: Int? = nil,
-        stopSequences: [String] = []
+        stopSequences: [String] = [],
+        tools: [ToolDefinition] = []
     ) {
         self.model = model
         self.messages = messages
@@ -96,6 +147,7 @@ public struct ChatRequest: Sendable {
         self.topP = topP
         self.maxTokens = maxTokens
         self.stopSequences = stopSequences
+        self.tools = tools
     }
 }
 

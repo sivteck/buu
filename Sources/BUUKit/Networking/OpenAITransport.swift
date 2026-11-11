@@ -72,6 +72,8 @@ public struct OpenAITransport: Sendable {
 
                     var decoder = SSEDecoder()
                     var jsonBuffer = Data()
+                    var failureStatus: Int?
+                    var failureBody = Data()
                     var mode = StreamSupport.ResponseMode.unknown
                     var state = OpenAIStreamState()
 
@@ -83,7 +85,8 @@ public struct OpenAITransport: Sendable {
                         switch chunk {
                         case .head(let head):
                             guard head.isSuccess else {
-                                throw HTTPError(statusCode: head.statusCode, body: "")
+                                failureStatus = head.statusCode
+                                continue
                             }
                             let type = head.contentType.lowercased()
                             if type.contains("text/event-stream") {
@@ -92,6 +95,10 @@ public struct OpenAITransport: Sendable {
                                 mode = .json
                             }
                         case .body(let data):
+                            if failureStatus != nil {
+                                failureBody.append(data)
+                                continue
+                            }
                             switch mode {
                             case .json:
                                 jsonBuffer.append(data)
@@ -115,6 +122,13 @@ public struct OpenAITransport: Sendable {
                         }
                     }
 
+                    if let failureStatus {
+                        throw HTTPError(
+                            statusCode: failureStatus,
+                            body: String(decoding: failureBody, as: UTF8.self)
+                        )
+                    }
+
                     for event in decoder.finish() {
                         emit(try Self.events(from: event, state: &state))
                     }
@@ -123,6 +137,7 @@ public struct OpenAITransport: Sendable {
                         emit(try Self.events(fromJSON: jsonBuffer, state: &state))
                     }
 
+                    emit(Self.flushToolCalls(state: &state))
                     continuation.yield(.finished(reason: state.stopReason, usage: state.usage))
                     continuation.finish()
                 } catch is CancellationError {
@@ -141,7 +156,13 @@ public struct OpenAITransport: Sendable {
         var messages: [OpenAIChatRequest.Message] = []
 
         if let system = request.system, !system.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            messages.append(OpenAIChatRequest.Message(role: "system", content: .text(system)))
+            messages.append(OpenAIChatRequest.Message(
+                role: "system",
+                content: .text(system),
+                toolCalls: nil,
+                toolCallID: nil,
+                reasoningContent: nil
+            ))
         }
 
         for message in request.messages {
@@ -151,10 +172,14 @@ public struct OpenAITransport: Sendable {
                 case .image: return true
                 }
             }
-            guard !blocks.isEmpty else { continue }
+            let hasToolCalls = !message.toolCalls.isEmpty
+            let isToolResult = message.role == .tool && message.toolCallID != nil
+            guard !blocks.isEmpty || hasToolCalls || isToolResult else { continue }
 
-            let content: OpenAIChatRequest.Content
-            if blocks.count == 1, case .text(let text) = blocks[0] {
+            let content: OpenAIChatRequest.Content?
+            if blocks.isEmpty {
+                content = isToolResult ? .text(message.text) : nil
+            } else if blocks.count == 1, case .text(let text) = blocks[0] {
                 content = .text(text)
             } else {
                 var parts: [OpenAIChatRequest.Part] = []
@@ -166,7 +191,14 @@ public struct OpenAITransport: Sendable {
                 }
                 content = .parts(parts)
             }
-            messages.append(OpenAIChatRequest.Message(role: Self.wireRole(message.role), content: content))
+
+            messages.append(OpenAIChatRequest.Message(
+                role: Self.wireRole(message.role),
+                content: content,
+                toolCalls: hasToolCalls ? message.toolCalls.map(OpenAIChatRequest.ToolCall.init) : nil,
+                toolCallID: message.toolCallID,
+                reasoningContent: message.reasoning
+            ))
         }
 
         let body = OpenAIChatRequest(
@@ -177,7 +209,8 @@ public struct OpenAITransport: Sendable {
             temperature: request.temperature,
             topP: request.topP,
             maxTokens: request.maxTokens,
-            stop: request.stopSequences.isEmpty ? nil : request.stopSequences
+            stop: request.stopSequences.isEmpty ? nil : request.stopSequences,
+            tools: request.tools.isEmpty ? nil : request.tools.map(OpenAIChatRequest.Tool.init)
         )
         return try JSONCoding.encode(body)
     }
@@ -187,14 +220,22 @@ public struct OpenAITransport: Sendable {
         case .system: return "system"
         case .user: return "user"
         case .assistant: return "assistant"
+        case .tool: return "tool"
         }
     }
 
     // MARK: - Decoding
 
+    struct PartialToolCall {
+        var id: String?
+        var name: String?
+        var arguments: String = ""
+    }
+
     struct OpenAIStreamState {
         var usage: TokenUsage?
         var stopReason = StopReason.unknown
+        var toolCalls: [Int: PartialToolCall] = [:]
     }
 
     static func events(from event: SSEEvent, state: inout OpenAIStreamState) throws -> [StreamEvent] {
@@ -226,19 +267,40 @@ public struct OpenAITransport: Sendable {
             if let content = choice.delta?.content, !content.isEmpty {
                 events.append(.text(content))
             }
-            if let reasoning = choice.delta?.reasoningContent, !reasoning.isEmpty {
+            if let reasoning = choice.delta?.reasoningContent ?? choice.delta?.reasoning, !reasoning.isEmpty {
                 events.append(.reasoning(reasoning))
             }
             for toolCall in choice.delta?.toolCalls ?? [] {
-                let name = toolCall.function?.name ?? toolCall.id ?? "tool"
-                let arguments = toolCall.function?.arguments ?? ""
-                events.append(.toolCall(name: name, arguments: arguments))
+                let index = toolCall.index ?? 0
+                var partial = state.toolCalls[index] ?? PartialToolCall()
+                if let id = toolCall.id, !id.isEmpty { partial.id = id }
+                if let name = toolCall.function?.name, !name.isEmpty {
+                    partial.name = (partial.name ?? "") + name
+                }
+                if let arguments = toolCall.function?.arguments, !arguments.isEmpty {
+                    partial.arguments += arguments
+                }
+                state.toolCalls[index] = partial
             }
             if let reason = choice.finishReason {
                 state.stopReason = StopReason(wireValue: reason)
             }
         }
         return events
+    }
+
+    /// OpenAI streams tool arguments in pieces. Emit one complete call per index
+    /// when the stream ends, not one event per delta.
+    static func flushToolCalls(state: inout OpenAIStreamState) -> [StreamEvent] {
+        guard !state.toolCalls.isEmpty else { return [] }
+        let calls = state.toolCalls
+            .sorted { $0.key < $1.key }
+            .compactMap { _, partial -> StreamEvent? in
+                guard let name = partial.name, !name.isEmpty else { return nil }
+                return .toolCall(id: partial.id, name: name, arguments: partial.arguments)
+            }
+        state.toolCalls.removeAll(keepingCapacity: true)
+        return calls
     }
 
     static func events(fromJSON data: Data, state: inout OpenAIStreamState) throws -> [StreamEvent] {
@@ -260,8 +322,16 @@ public struct OpenAITransport: Sendable {
             if let content = choice.message?.content ?? choice.delta?.content, !content.isEmpty {
                 events.append(.text(content))
             }
-            if let reasoning = choice.message?.reasoningContent, !reasoning.isEmpty {
+            if let reasoning = choice.message?.reasoningContent ?? choice.message?.reasoning, !reasoning.isEmpty {
                 events.append(.reasoning(reasoning))
+            }
+            for toolCall in choice.message?.toolCalls ?? [] {
+                guard let name = toolCall.function?.name, !name.isEmpty else { continue }
+                events.append(.toolCall(
+                    id: toolCall.id,
+                    name: name,
+                    arguments: toolCall.function?.arguments ?? ""
+                ))
             }
             if let reason = choice.finishReason {
                 state.stopReason = StopReason(wireValue: reason)

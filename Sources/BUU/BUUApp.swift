@@ -14,16 +14,32 @@ struct BUUApp: App {
                     await appState.bootstrap()
                 }
         }
-        .defaultSize(width: 1100, height: 760)
-        // Seamless window: there is no window toolbar, because the chat header
-        // is real content in the detail pane. Nothing can overlap the messages.
-        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 840)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Chat") {
-                    Task { @MainActor in appState.newConversation() }
+                Button(appState.sidebarMode == .chats ? "New Chat" : "New Task") {
+                    Task { @MainActor in appState.performPrimarySidebarAction() }
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Divider()
+
+                Button("Search Sidebar") {
+                    Task { @MainActor in appState.focusSidebarSearchToken += 1 }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Divider()
+
+                Button("Chats") {
+                    Task { @MainActor in appState.sidebarMode = .chats }
+                }
+                .keyboardShortcut("1", modifiers: .control)
+                Button("Agentic") {
+                    Task { @MainActor in appState.sidebarMode = .agentic }
+                }
+                .keyboardShortcut("2", modifiers: .control)
 
                 #if DEBUG
                 Button("Debug: Load Test Thread (200 messages)") {
@@ -59,6 +75,7 @@ struct BUUApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
         }
+
     }
 }
 

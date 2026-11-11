@@ -12,21 +12,26 @@ struct MessageRow: View, Equatable {
     let showReasoning: Bool
 
     nonisolated static func == (lhs: MessageRow, rhs: MessageRow) -> Bool {
-        lhs.turn.id == rhs.turn.id
-            && lhs.turn.text == rhs.turn.text
+        guard lhs.turn.id == rhs.turn.id,
+              lhs.isLastAssistant == rhs.isLastAssistant,
+              lhs.showReasoning == rhs.showReasoning,
+              lhs.turn.isStreaming == rhs.turn.isStreaming,
+              lhs.turn.contentRevision == rhs.turn.contentRevision else { return false }
+        // New turns use a monotonic revision. Legacy persisted turns have no
+        // revision, so keep the content comparison for those only.
+        guard lhs.turn.contentRevision == nil else { return true }
+        return lhs.turn.text == rhs.turn.text
             && lhs.turn.images == rhs.turn.images
             && lhs.turn.reasoning == rhs.turn.reasoning
-            && lhs.turn.isStreaming == rhs.turn.isStreaming
             && lhs.turn.errorMessage == rhs.turn.errorMessage
             && lhs.turn.stopReason == rhs.turn.stopReason
             && lhs.turn.usage == rhs.turn.usage
             && lhs.turn.metrics == rhs.turn.metrics
-            && lhs.isLastAssistant == rhs.isLastAssistant
-            && lhs.showReasoning == rhs.showReasoning
     }
 
     var body: some View {
-        Group {
+        // A single-root row keeps ForEach on the fast path inside LazyVStack.
+        VStack(alignment: .leading, spacing: 0) {
             switch turn.role {
             case .user:
                 UserMessageBubble(turn: turn)
@@ -41,8 +46,16 @@ struct MessageRow: View, Equatable {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            case .tool:
+                // Tool results are normally transient, but keep persisted ones
+                // readable if a future version stores them.
+                Text(turn.text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(RenderProbeModifier(id: turn.id))
     }
 }
@@ -255,7 +268,9 @@ private struct MessageMetadata: View {
     private var liveTokensPerSecond: Double? {
         let elapsed = Date().timeIntervalSince(turn.createdAt)
         guard elapsed > 0.25 else { return nil }
-        let characters = turn.text.count + turn.reasoning.count
+        // UTF-8 length is a much cheaper proxy than grapheme-cluster counting
+        // and is recomputed on the streaming row for every token.
+        let characters = turn.text.utf8.count + turn.reasoning.utf8.count
         guard characters > 8 else { return nil }
         return Double(characters) / 4 / elapsed
     }
@@ -301,6 +316,7 @@ private struct MetadataButton: View {
 // MARK: - Thinking
 
 struct ThinkingDisclosure: View, Equatable {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let text: String
 
     @State private var isExpanded = false
@@ -312,7 +328,7 @@ struct ThinkingDisclosure: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) {
+                withAnimation(Theme.Motion.standard(reduceMotion: reduceMotion)) {
                     isExpanded.toggle()
                 }
             } label: {
@@ -366,24 +382,31 @@ struct ThinkingDisclosure: View, Equatable {
 
 struct TypingIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var phase = 0.0
 
     var body: some View {
+        Group {
+            if reduceMotion {
+                dots(active: nil)
+            } else {
+                PhaseAnimator([0, 1, 2]) { phase in
+                    dots(active: phase)
+                } animation: { _ in
+                    .easeInOut(duration: 0.35)
+                }
+            }
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityLabel("Assistant is thinking")
+    }
+
+    private func dots(active: Int?) -> some View {
         HStack(spacing: 4) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .frame(width: 5, height: 5)
-                    .opacity(phase == Double(index) ? 1 : 0.3)
+                    .opacity(active == index ? 1 : 0.3)
             }
         }
-        .foregroundStyle(.secondary)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: true)) {
-                phase = 2
-            }
-        }
-        .accessibilityLabel("Assistant is thinking")
     }
 }
 

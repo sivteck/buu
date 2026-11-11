@@ -137,6 +137,26 @@ struct IntegrationTests {
         #expect(server.requests.first?.path == "/v1/models")
     }
 
+    @Test("Streaming HTTP errors keep the server body")
+    func streamErrorBodyIsPreserved() async throws {
+        let body = #"{"error":{"message":"tool_calls require content null"}}"#
+        let server = try MockHTTPServer(contentType: "application/json", body: body, status: 400)
+        server.start()
+        defer { server.stop() }
+
+        let client = try ProviderClient(endpoint: endpoint(server, style: .openAI), apiKey: nil)
+        let request = ChatRequest(model: "m", messages: [ChatMessage(role: .user, text: "Hi")])
+
+        do {
+            for try await _ in client.stream(request: request) { }
+            Issue.record("expected the stream to fail")
+        } catch let error as HTTPError {
+            #expect(error.statusCode == 400)
+            #expect(error.body.contains("tool_calls require content null"))
+            #expect(error.errorDescription?.contains("tool_calls require content null") == true)
+        }
+    }
+
     @Test("HTTP errors are reported")
     func serverErrorIsReported() async throws {
         let server = try MockHTTPServer(contentType: "application/json", body: #"{"error":{"message":"nope"}}"#, status: 401)

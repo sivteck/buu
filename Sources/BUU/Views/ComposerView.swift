@@ -11,6 +11,9 @@ struct ComposerView: View {
     @State private var isImportingImages = false
     @State private var isDropTargeted = false
     @State private var editorWidth: CGFloat = 520
+    /// Measured outside `body`: sizing the whole draft on every unrelated
+    /// state change was the composer's most expensive layout work.
+    @State private var editorHeight: CGFloat = 28
 
     private var isComposerActive: Bool { isEditorFocused || isDropTargeted }
 
@@ -75,6 +78,8 @@ struct ComposerView: View {
         .onExitCommand {
             if appState.isSending { appState.stop() }
         }
+        .onAppear { updateEditorHeight() }
+        .onChange(of: appState.composerText) { updateEditorHeight() }
     }
 
     // MARK: - Editor
@@ -119,15 +124,22 @@ struct ComposerView: View {
         .onPreferenceChange(EditorWidthKey.self) { width in
             if width > 0, abs(width - editorWidth) > 0.5 {
                 editorWidth = width
+                updateEditorHeight()
             }
         }
     }
 
     /// Grows with the text from one line up to ``Theme/Metrics/composerMaxLines``,
-    /// then the field scrolls internally.
-    private var editorHeight: CGFloat {
+    /// then the field scrolls internally. Measurements happen on text/width
+    /// changes, not on every body evaluation.
+    private static let bodyLineHeight: CGFloat = {
         let font = NSFont.systemFont(ofSize: Theme.Typography.bodySize)
-        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        return ceil(font.ascender - font.descender + font.leading)
+    }()
+
+    private func updateEditorHeight() {
+        let font = NSFont.systemFont(ofSize: Theme.Typography.bodySize)
+        let lineHeight = Self.bodyLineHeight
         let usable = max(80, editorWidth - 12)
         let sample = appState.composerText.isEmpty ? "Ag" : appState.composerText
         let bounds = (sample as NSString).boundingRect(
@@ -136,7 +148,10 @@ struct ComposerView: View {
             attributes: [.font: font]
         )
         let lines = max(1, min(Theme.Metrics.composerMaxLines, Int(ceil(bounds.height / lineHeight))))
-        return CGFloat(lines) * lineHeight + 8
+        let height = CGFloat(lines) * lineHeight + 8
+        if abs(height - editorHeight) > 0.5 {
+            editorHeight = height
+        }
     }
 
     // MARK: - Controls

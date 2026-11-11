@@ -67,6 +67,8 @@ public struct AnthropicTransport: Sendable {
 
                     var decoder = SSEDecoder()
                     var jsonBuffer = Data()
+                    var failureStatus: Int?
+                    var failureBody = Data()
                     var mode = StreamSupport.ResponseMode.unknown
                     var state = AnthropicStreamState()
 
@@ -78,7 +80,8 @@ public struct AnthropicTransport: Sendable {
                         switch chunk {
                         case .head(let head):
                             guard head.isSuccess else {
-                                throw HTTPError(statusCode: head.statusCode, body: "")
+                                failureStatus = head.statusCode
+                                continue
                             }
                             let type = head.contentType.lowercased()
                             if type.contains("text/event-stream") {
@@ -87,6 +90,10 @@ public struct AnthropicTransport: Sendable {
                                 mode = .json
                             }
                         case .body(let data):
+                            if failureStatus != nil {
+                                failureBody.append(data)
+                                continue
+                            }
                             switch mode {
                             case .json:
                                 jsonBuffer.append(data)
@@ -108,6 +115,13 @@ public struct AnthropicTransport: Sendable {
                         case .complete:
                             break
                         }
+                    }
+
+                    if let failureStatus {
+                        throw HTTPError(
+                            statusCode: failureStatus,
+                            body: String(decoding: failureBody, as: UTF8.self)
+                        )
                     }
 
                     for event in decoder.finish() {
@@ -141,9 +155,12 @@ public struct AnthropicTransport: Sendable {
             case .system: continue // system messages travel in the dedicated field
             case .user: role = "user"
             case .assistant: role = "assistant"
+            case .tool: role = "user" // tool results ride in a user turn
             }
 
-            let content = message.blocks.compactMap { block -> AnthropicMessageRequest.Content? in
+            // A tool result's text belongs inside the tool_result block, not in
+            // an extra text block before it.
+            var content = message.role == .tool ? [] : message.blocks.compactMap { block -> AnthropicMessageRequest.Content? in
                 switch block {
                 case .text(let text):
                     guard !text.isEmpty else { return nil }
@@ -155,6 +172,23 @@ public struct AnthropicTransport: Sendable {
                     )))
                 }
             }
+
+            for call in message.toolCalls {
+                content.append(.toolUse(.init(
+                    id: call.id,
+                    name: call.name,
+                    input: Self.toolInput(from: call.arguments)
+                )))
+            }
+
+            if message.role == .tool, let callID = message.toolCallID {
+                content.append(.toolResult(.init(
+                    toolUseID: callID,
+                    content: message.text,
+                    isError: message.toolIsError
+                )))
+            }
+
             guard !content.isEmpty else { continue }
 
             // Anthropic expects strictly alternating user/assistant turns.
@@ -181,9 +215,17 @@ public struct AnthropicTransport: Sendable {
             temperature: request.temperature,
             topP: request.topP,
             stream: true,
-            stopSequences: request.stopSequences.isEmpty ? nil : request.stopSequences
+            stopSequences: request.stopSequences.isEmpty ? nil : request.stopSequences,
+            tools: request.tools.isEmpty ? nil : request.tools.map(AnthropicMessageRequest.Tool.init)
         )
         return try JSONCoding.encode(body)
+    }
+
+    static func toolInput(from arguments: String) -> JSONValue {
+        guard !arguments.isEmpty, let data = arguments.data(using: .utf8) else {
+            return .object([:])
+        }
+        return (try? JSONCoding.decode(JSONValue.self, from: data)) ?? .object([:])
     }
 
     // MARK: - Decoding
@@ -191,6 +233,7 @@ public struct AnthropicTransport: Sendable {
     struct AnthropicStreamState {
         var usage: TokenUsage?
         var stopReason = StopReason.unknown
+        var toolIDs: [Int: String] = [:]
         var toolNames: [Int: String] = [:]
         var toolArguments: [Int: String] = [:]
     }
@@ -215,6 +258,7 @@ public struct AnthropicTransport: Sendable {
 
         case "content_block_start":
             if let block = streamEvent.contentBlock, block.type == "tool_use", let index = streamEvent.index {
+                state.toolIDs[index] = block.id
                 state.toolNames[index] = block.name ?? "tool"
                 state.toolArguments[index] = ""
             }
@@ -241,9 +285,11 @@ public struct AnthropicTransport: Sendable {
         case "content_block_stop":
             guard let index = streamEvent.index, let name = state.toolNames[index] else { return [] }
             let arguments = state.toolArguments[index] ?? ""
+            let id = state.toolIDs[index]
+            state.toolIDs.removeValue(forKey: index)
             state.toolNames.removeValue(forKey: index)
             state.toolArguments.removeValue(forKey: index)
-            return [.toolCall(name: name, arguments: arguments)]
+            return [.toolCall(id: id, name: name, arguments: arguments)]
 
         case "message_delta":
             if let reason = streamEvent.delta?.stopReason {
@@ -290,6 +336,11 @@ public struct AnthropicTransport: Sendable {
         }
         if !response.reasoning.isEmpty {
             events.append(.reasoning(response.reasoning))
+        }
+        for block in response.content ?? [] where block.type == "tool_use" {
+            guard let name = block.name, !name.isEmpty else { continue }
+            let arguments = block.input.flatMap { try? JSONCoding.encode($0) }.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            events.append(.toolCall(id: block.id, name: name, arguments: arguments))
         }
         return events
     }

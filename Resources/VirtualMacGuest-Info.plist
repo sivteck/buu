@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>VirtualMacGuest</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.buu.VirtualMacGuest</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>BUU Virtual Mac Guest</string>
+    <key>CFBundleDisplayName</key>
+    <string>BUU Virtual Mac Guest</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>5</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>BUU copies task artifacts to the Desktop so apps inside the virtual Mac can open them.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>BUU may copy task artifacts into the virtual Mac's Documents folder if Desktop access is unavailable.</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>

@@ -47,8 +47,12 @@ enum Theme {
         static let sidebarMin: CGFloat = 220
         static let sidebarIdeal: CGFloat = 250
         static let sidebarMax: CGFloat = 300
-        static let windowMinWidth: CGFloat = 760
-        static let windowMinHeight: CGFloat = 520
+        /// Sidebar 220 + display pane 520 + inspector 340 + split padding.
+        static let sidebarMinWidth: CGFloat = 220
+        static let displayPaneMinWidth: CGFloat = 520
+        static let windowMinWidth: CGFloat = 1120
+        /// Toolbar + display + VM bar + inspector header/tabs/trace/composer.
+        static let windowMinHeight: CGFloat = 720
         /// Code blocks taller than this collapse behind "Show all N lines".
         static let collapsedCodeLines = 18
         /// Bottom content inset so the last row never touches the composer divider.
@@ -79,6 +83,12 @@ enum Theme {
         static var codeSurface: Color { Color(nsColor: .textBackgroundColor) }
         static var userBubble: Color { Color.accentColor.opacity(0.16) }
         static var inlineCode: Color { Color.primary.opacity(0.07) }
+
+        // Semantic status signals.
+        static var success: Color { .green }
+        static var warning: Color { .orange }
+        static var danger: Color { .red }
+        static var info: Color { .blue }
     }
 
     enum Motion {

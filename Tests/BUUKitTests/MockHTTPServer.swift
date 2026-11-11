@@ -29,15 +29,19 @@ final class MockHTTPServer: @unchecked Sendable {
     private var received: [ReceivedRequest] = []
 
     let port: UInt16
+    let responseDelay: TimeInterval
 
     /// - Parameters:
     ///   - contentType: value of the `Content-Type` response header.
     ///   - body: the raw response body.
     ///   - status: the HTTP status line code.
-    init(contentType: String, body: String, status: Int = 200) throws {
+    ///   - responseDelay: wait this long after reading the request before answering.
+    ///     Used to exercise cancellation of long-poll requests.
+    init(contentType: String, body: String, status: Int = 200, responseDelay: TimeInterval = 0) throws {
         var port: UInt16 = 0
         listenDescriptor = try Self.bindLoopback(port: &port)
         self.port = port
+        self.responseDelay = responseDelay
 
         let payload = body
         let header = """
@@ -121,6 +125,10 @@ final class MockHTTPServer: @unchecked Sendable {
                 lock.unlock()
                 break
             }
+        }
+
+        if responseDelay > 0 {
+            Thread.sleep(forTimeInterval: responseDelay)
         }
 
         // Send the response in two chunks so the client has to stitch them.

@@ -88,6 +88,33 @@ public enum ImageProcessor {
         #endif
     }
 
+    /// A small PNG thumbnail for display. Decoding is bounded by
+    /// ``maxPixelSize`` and uses ImageIO "thumbnail from image" so the full
+    /// image is never decoded on the main actor.
+    public static func thumbnailData(data: Data, maxPixelSize: Int) -> Data? {
+        #if canImport(ImageIO)
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        let encoded = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(encoded, "public.png" as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return encoded as Data
+        #else
+        return nil
+        #endif
+    }
+
     /// Pixel size of an image, when it can be determined.
     public static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
         #if canImport(ImageIO)

@@ -5,7 +5,32 @@ import Foundation
 struct OpenAIChatRequest: Encodable {
     struct Message: Encodable {
         let role: String
-        let content: Content
+        let content: Content?
+        let toolCalls: [ToolCall]?
+        let toolCallID: String?
+        let reasoningContent: String?
+
+        enum CodingKeys: String, CodingKey {
+            case role, content
+            case toolCalls = "tool_calls"
+            case toolCallID = "tool_call_id"
+            case reasoningContent = "reasoning_content"
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(role, forKey: .role)
+            if let content {
+                try container.encode(content, forKey: .content)
+            } else if toolCalls != nil {
+                // OpenAI-compatible servers differ: some require an explicit
+                // null content on an assistant tool-call message.
+                try container.encodeNil(forKey: .content)
+            }
+            try container.encodeIfPresent(toolCalls, forKey: .toolCalls)
+            try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
+            try container.encodeIfPresent(reasoningContent, forKey: .reasoningContent)
+        }
     }
 
     enum Content: Encodable {
@@ -44,6 +69,41 @@ struct OpenAIChatRequest: Encodable {
         }
     }
 
+    struct ToolCall: Encodable {
+        struct Function: Encodable {
+            let name: String
+            let arguments: String
+        }
+
+        let id: String
+        let type: String = "function"
+        let function: Function
+
+        init(_ call: BUUKit.ToolCall) {
+            self.id = call.id
+            self.function = Function(name: call.name, arguments: call.arguments)
+        }
+    }
+
+    struct Tool: Encodable {
+        struct Function: Encodable {
+            let name: String
+            let description: String
+            let parameters: JSONValue
+        }
+
+        let type: String = "function"
+        let function: Function
+
+        init(_ definition: ToolDefinition) {
+            self.function = Function(
+                name: definition.name,
+                description: definition.description,
+                parameters: definition.parameters
+            )
+        }
+    }
+
     struct StreamOptions: Encodable {
         let includeUsage: Bool
 
@@ -60,9 +120,10 @@ struct OpenAIChatRequest: Encodable {
     let topP: Double?
     let maxTokens: Int?
     let stop: [String]?
+    let tools: [Tool]?
 
     enum CodingKeys: String, CodingKey {
-        case model, messages, stream, temperature, stop
+        case model, messages, stream, temperature, stop, tools
         case streamOptions = "stream_options"
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -76,6 +137,14 @@ struct OpenAIChatResponse: Decodable {
         let role: String?
         let content: String?
         let reasoningContent: String?
+        let reasoning: String?
+        let toolCalls: [OpenAIStreamChunk.ToolCall]?
+
+        enum CodingKeys: String, CodingKey {
+            case role, content, reasoning
+            case reasoningContent = "reasoning_content"
+            case toolCalls = "tool_calls"
+        }
     }
 
     struct Choice: Decodable {
@@ -120,10 +189,11 @@ struct OpenAIStreamChunk: Decodable {
         let role: String?
         let content: String?
         let reasoningContent: String?
+        let reasoning: String?
         let toolCalls: [ToolCall]?
 
         enum CodingKeys: String, CodingKey {
-            case role, content
+            case role, content, reasoning
             case reasoningContent = "reasoning_content"
             case toolCalls = "tool_calls"
         }

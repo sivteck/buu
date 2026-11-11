@@ -14,6 +14,15 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var sendSystemPrompt: Bool
     /// Preferred appearance: `system`, `light` or `dark`.
     public var appearance: Appearance
+    /// Named virtual-Mac recipes.
+    public var macTaskConfigurations: [MacTaskConfiguration]?
+    public var activeMacTaskConfigurationID: UUID?
+    /// User-created Agentic task lanes.
+    public var agenticTasks: [AgenticTaskRecord]?
+    public var activeAgenticTaskID: UUID?
+    /// Destination for automatically archived Mac task traces.
+    public var macTraceAutosavePath: String?
+    public var macTraceAutosaveBookmark: Data?
 
     public enum Appearance: String, Codable, Sendable, CaseIterable {
         case system
@@ -35,7 +44,13 @@ public struct AppSettings: Codable, Sendable, Equatable {
         selectedModel: String = "",
         showReasoning: Bool = true,
         sendSystemPrompt: Bool = true,
-        appearance: Appearance = .system
+        appearance: Appearance = .system,
+        macTaskConfigurations: [MacTaskConfiguration]? = nil,
+        activeMacTaskConfigurationID: UUID? = nil,
+        agenticTasks: [AgenticTaskRecord]? = nil,
+        activeAgenticTaskID: UUID? = nil,
+        macTraceAutosavePath: String? = nil,
+        macTraceAutosaveBookmark: Data? = nil
     ) {
         self.endpoints = endpoints
         self.activeEndpointID = activeEndpointID ?? endpoints.first?.id
@@ -43,6 +58,12 @@ public struct AppSettings: Codable, Sendable, Equatable {
         self.showReasoning = showReasoning
         self.sendSystemPrompt = sendSystemPrompt
         self.appearance = appearance
+        self.macTaskConfigurations = macTaskConfigurations
+        self.activeMacTaskConfigurationID = activeMacTaskConfigurationID
+        self.agenticTasks = agenticTasks
+        self.activeAgenticTaskID = activeAgenticTaskID
+        self.macTraceAutosavePath = macTraceAutosavePath
+        self.macTraceAutosaveBookmark = macTraceAutosaveBookmark
     }
 
     public var activeEndpoint: ProviderEndpoint? {

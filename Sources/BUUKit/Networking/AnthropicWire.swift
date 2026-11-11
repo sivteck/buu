@@ -29,9 +29,31 @@ struct AnthropicMessageRequest: Encodable {
         let source: ImageSource
     }
 
+    struct ToolUseContent: Encodable {
+        let type: String = "tool_use"
+        let id: String
+        let name: String
+        let input: JSONValue
+    }
+
+    struct ToolResultContent: Encodable {
+        let type: String = "tool_result"
+        let toolUseID: String
+        let content: String
+        let isError: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case type, content
+            case toolUseID = "tool_use_id"
+            case isError = "is_error"
+        }
+    }
+
     enum Content: Encodable {
         case text(TextContent)
         case image(ImageContent)
+        case toolUse(ToolUseContent)
+        case toolResult(ToolResultContent)
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.singleValueContainer()
@@ -39,6 +61,10 @@ struct AnthropicMessageRequest: Encodable {
             case .text(let value):
                 try container.encode(value)
             case .image(let value):
+                try container.encode(value)
+            case .toolUse(let value):
+                try container.encode(value)
+            case .toolResult(let value):
                 try container.encode(value)
             }
         }
@@ -49,6 +75,23 @@ struct AnthropicMessageRequest: Encodable {
         let content: [Content]
     }
 
+    struct Tool: Encodable {
+        let name: String
+        let description: String
+        let inputSchema: JSONValue
+
+        enum CodingKeys: String, CodingKey {
+            case name, description
+            case inputSchema = "input_schema"
+        }
+
+        init(_ definition: ToolDefinition) {
+            self.name = definition.name
+            self.description = definition.description
+            self.inputSchema = definition.parameters
+        }
+    }
+
     let model: String
     let maxTokens: Int
     let system: [TextBlock]?
@@ -57,9 +100,10 @@ struct AnthropicMessageRequest: Encodable {
     let topP: Double?
     let stream: Bool
     let stopSequences: [String]?
+    let tools: [Tool]?
 
     enum CodingKeys: String, CodingKey {
-        case model, system, messages, temperature, stream
+        case model, system, messages, temperature, stream, tools
         case maxTokens = "max_tokens"
         case topP = "top_p"
         case stopSequences = "stop_sequences"
@@ -73,6 +117,9 @@ struct AnthropicMessageResponse: Decodable {
         let type: String
         let text: String?
         let thinking: String?
+        let id: String?
+        let name: String?
+        let input: JSONValue?
     }
 
     struct Usage: Decodable {
@@ -147,6 +194,7 @@ struct AnthropicStreamEvent: Decodable {
         let type: String?
         let text: String?
         let thinking: String?
+        let id: String?
         let name: String?
     }
 
